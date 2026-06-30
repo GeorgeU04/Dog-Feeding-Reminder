@@ -1,6 +1,7 @@
 --target=avr
 -mmcu=atmega328p
 -x
+-assembler-with-cpp
 -D__ASSEMBLER__=1
 -D__SFR_OFFSET=0
 -I
