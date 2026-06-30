@@ -88,10 +88,10 @@ Loop:
     rjmp Loop
 
 Delay_ms:
-    sts Delay, Delay * 1000
+    sts Delay, Delay * 500
     loop:
-        dec (Delay)
-        brne loop
+        dec Delay ; 1 cycle 
+        brne loop ; 1 cycle if condition is false
     ret
 
 I2C_Write:
@@ -141,11 +141,59 @@ I2C_Write:
 
     ldi r16, (1 << TWINT) | (1 << TWEN) | (1 << TWSTO)
     sts TWCR, r16 ; Transmit stop
-    
+ 
     pop r16
     ret
 
 I2C_Read:
+    push r16
+    ldi r16, (1 << TWINT) | (1 << TWSTA) | (1 << TWEN) ; Send start condition 
+    sts TWCR, r16
+
+    wait1: 
+        lds r16, TWCR 
+        sbrs r16, TWINT ; Check if TWINT bit of TWCR is set 
+        rjmp wait1 
+
+    lds r16, TWSR
+    andi r16, 0xF8 ; Check if START was transmitted, status code should be 0x08
+    cpi r16, 0x08 
+    brne Error
+
+    ldi r16, (RTCAddr | 0x01)
+    sts TWDR, r16 ; Write SLA+R, from r17 into TWDR
+    ldi r16, (1 << TWINT) | (1 << TWEN) 
+    sts TWCR, r16 ; Transmit SLA+R
+
+    wait2:
+        lds r16, TWCR 
+        sbrs r16, TWINT ; Check if TWINT bit of TWCR is set
+        rjmp wait2
+
+    lds r16, TWSR
+    andi r16, 0xF8 ; Check if SLA+R was received, status code should be 0x40
+    cpi r16, 0x40
+    brne Error
+
+    ldi r16, I2CData 
+    sts TWDR, r16 ; Write data into TWDR
+    ldi r16, (1 << TWINT) | (1 << TWEN) 
+    sts TWCR, r16 ; Transmit data
+
+    wait3:
+        lds r16, TWCR 
+        sbrs r16, TWINT ; Check if TWINT bit of TWCR is set
+        rjmp wait3
+
+    lds r16, TWSR
+    andi r16, 0xF8 ; Check if data was received, status code should be 0x50
+    cpi r16, 0x50
+    brne Error
+
+    ldi r16, (1 << TWINT) | (1 << TWEN) | (1 << TWSTO)
+    sts TWCR, r16 ; Transmit stop
+ 
+    pop r16
     ret
 
 Error:
@@ -166,7 +214,7 @@ Write_Command_LCD:
     ori r16, 0x0C
     sts I2CData, r16 
     rcall I2C_Write
-    ori r16, 0x0C
+    ori r16, 0x08
     sts I2CData, r16 
     rcall I2C_Write
     pop r17
