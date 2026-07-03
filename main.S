@@ -6,10 +6,10 @@
 .equ RTCAddr, (0x68 << 1) 
 .equ LCDAddr,  (0x27 << 1)
 .equ clockSpeed, 16000000UL
-LEDState: .byte 0
+Interrupt: .byte 0
 LCDBytes: .byte 0,0,0,0
-
-String: .asciz  "Hello, world\n"
+.section .progmem.data
+String: .asciz  "Hello, world"
 
 .text
 .global main
@@ -37,12 +37,17 @@ main:
     ldi r18, 0
     ldi r20, 0
     rcall Set_Cursor
-    ldi r17, 5
+    ldi r17, 10
     rcall Delay_ms
     ; Write Data
-    ldi r18, 'H'
-    rcall Write_Data_LCD
+    rcall LCD_Write_String
     Loop:
+        lds r16, Interrupt
+        cpi r16, 1
+        brne Loop 
+        logTime:
+            ldi r16, 0
+            sts Interrupt, r16 ; reset intterupt flag to 0
         rjmp Loop
 
 I2C_Write:
@@ -199,6 +204,27 @@ Set_Cursor:
         pop r20
         ret
 
+LCD_Write_String:
+    push r18
+    push r16
+    push r26
+    push r27
+    ldi r30, lo8(String)
+    ldi r31, hi8(String)
+    loop1:
+        lpm r16, Z+
+        cpi r16, 0
+        breq end1
+        mov r18, r16
+        rcall Write_Data_LCD
+        rjmp loop1
+    end1:
+    pop r27
+    pop r26
+    pop r16
+    pop r18
+    ret
+
 LCD_Init:
     push r17
     push r18
@@ -290,16 +316,17 @@ Delay_ms:
 .global INT0_vect
 INT0_vect:
     push r16
+    push r17
+    push r0
     in r0, SREG
     push r0
-    push r17
-    ldi r17, (1 << PB0)
-    lds r16, LEDState
-    eor r16, r17 ; toggle LED
-    sts LEDState, r16
-    out PORTB, r16
+    ldi r16, 1  ; set intterupt flag
+    sts Interrupt, r16
+    ldi r17, 70
+    rcall Delay_ms
     pop r17
-    pop r0
     pop r16
+    pop r0
     out SREG, r0
+    pop r0
     reti
