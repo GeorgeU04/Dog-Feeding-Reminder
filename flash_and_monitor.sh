@@ -3,11 +3,12 @@
 set -e
 
 MCU="atmega328p"
-CLOCK="1000000UL"
+CLOCK="16000000UL"
 OPTIMIZATION="-Os"
 HEX_FILE="firmware.hex"
 ELF_FILE="firmware.elf"
 PROGRAMMER="atmelice_isp"
+FUSE="0xF7"
 
 COMMON_FLAGS=(-mmcu="$MCU" -DF_CPU="$CLOCK" "$OPTIMIZATION")
 OBJECTS=()
@@ -40,6 +41,6 @@ echo "Converting ELF to HEX..."
 avr-objcopy -O ihex "$ELF_FILE" "$HEX_FILE"
 
 echo "Uploading to ATmega328P..."
-avrdude -c "$PROGRAMMER" -p "$MCU" -U "flash:w:$HEX_FILE:i"
+avrdude -c "$PROGRAMMER" -p "$MCU" -U "flash:w:$HEX_FILE:i" -U "lfuse:w:$FUSE:m"
 
 echo "Done."
