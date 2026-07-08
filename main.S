@@ -9,11 +9,13 @@
 Interrupt: .byte 0
 LCDBytes: .byte 0,0,0,0
 .section .progmem.data
-String: .asciz  "Hello, world"
+String: .asciz  "Fed: "
 
 .text
 .global main
 main:
+    ldi r30, 1
+    ldi r29, 5
     ldi r16, (1 << DDB0)
     out DDRB, r16 
     ldi r16, (0 << PB0)
@@ -27,7 +29,7 @@ main:
     andi r16, 0b11111000
     sts TWSR, r16
     ldi r16, 72
-    sts TWBR, r16    
+    sts TWBR, r16
     ; LCD Init
     rcall LCD_Init
     ldi r17, 20
@@ -40,14 +42,17 @@ main:
     ldi r17, 10
     rcall Delay_ms
     ; Write Data
-    rcall LCD_Write_String
     Loop:
         lds r16, Interrupt
         cpi r16, 1
         brne Loop 
         logTime:
+            rcall Set_Cursor
+            rcall LCD_Write_String
+            rcall LCD_Write_Num 
             ldi r16, 0
             sts Interrupt, r16 ; reset intterupt flag to 0
+            eor r20, r30
         rjmp Loop
 
 I2C_Write:
@@ -124,6 +129,76 @@ Error:
     ldi r16, (1 << PB0)
     out PORTB, r16
     rjmp Error
+
+I2C_Read:
+    push r16
+    push r17
+    push r26
+    push r27
+
+    ldi r16, (1 << TWINT) | (1 << TWSTA) | (1 << TWEN) ; Send start condition 
+    sts TWCR, r16
+
+    wait5: 
+        lds r16, TWCR 
+        sbrs r16, TWINT ; Check if TWINT bit of TWCR is set 
+        rjmp wait5
+
+    lds r16, TWSR
+    andi r16, 0xF8 ; Check if START was transmitted, status code should be 0x08
+    cpi r16, 0x08 
+    brne Error
+
+    ldi r16, LCDAddr 
+    sts TWDR, r16 ; Write SLA, from r17 into TWDR
+    ldi r16, (1 << TWINT) | (1 << TWEN) 
+    sts TWCR, r16 ; Transmit SLA+W
+
+    wait6:
+        lds r16, TWCR 
+        sbrs r16, TWINT ; Check if TWINT bit of TWCR is set
+        rjmp wait6
+
+    lds r16, TWSR
+    andi r16, 0xF8 ; Check if SLA+W was received, status code should be 0x18
+    cpi r16, 0x18
+    brne Error
+    
+    ldi r26, lo8(LCDBytes)
+    ldi r27, hi8(LCDBytes)
+    ldi r17, 4
+
+    loop5:
+    ld r16, X+
+    sts TWDR, r16 ; Write data into TWDR
+    ldi r16, (1 << TWINT) | (1 << TWEN) 
+    sts TWCR, r16 ; Transmit data
+
+    wait7:
+        lds r16, TWCR 
+        sbrs r16, TWINT ; Check if TWINT bit of TWCR is set
+        rjmp wait7
+
+    lds r16, TWSR
+    andi r16, 0xF8 ; Check if data was received, status code should be 0x28
+    cpi r16, 0x28
+    brne Error
+    dec r17
+    brne loop5 
+
+    ldi r16, (1 << TWINT) | (1 << TWEN) | (1 << TWSTO)
+    sts TWCR, r16 ; Transmit stop
+
+    wait8:
+        lds r16, TWCR 
+        sbrc r16, TWSTO
+        rjmp wait8
+
+    pop r27
+    pop r26
+    pop r17
+    pop r16
+    ret
 
 Write_Command_LCD:
     push r16
@@ -204,11 +279,48 @@ Set_Cursor:
         pop r20
         ret
 
+LCD_Write_Num:
+    push r29
+    push r18
+    push r16
+    push r17
+    push r20
+    ldi r20, 0
+    ldi r16, 0x30 ; add to get ascii value for num
+    mov r17, r29
+    cpi r17, 10
+    brlt OneDigit
+    loop2:
+        mov r17, r29
+        loop3:
+            subi r17, 10
+            inc r20
+            cpi r17, 10
+            brge loop3
+        mov r18, r20
+        add r18, r16
+        rcall Write_Data_LCD
+        mov r29, r20
+        cpi r29, 10
+        brge loop2
+    OneDigit:
+    mov r18, r17
+    add r18, r16
+    rcall Write_Data_LCD
+    pop r20
+    pop r17
+    pop r16
+    pop r18
+    pop r29
+    ret
+
 LCD_Write_String:
     push r18
     push r16
     push r26
     push r27
+    push r30
+    push r31
     ldi r30, lo8(String)
     ldi r31, hi8(String)
     loop1:
@@ -219,6 +331,8 @@ LCD_Write_String:
         rcall Write_Data_LCD
         rjmp loop1
     end1:
+    pop r31
+    pop r30
     pop r27
     pop r26
     pop r16
@@ -315,18 +429,18 @@ Delay_ms:
 
 .global INT0_vect
 INT0_vect:
+    push r0
     push r16
     push r17
-    push r0
     in r0, SREG
     push r0
     ldi r16, 1  ; set intterupt flag
     sts Interrupt, r16
     ldi r17, 70
     rcall Delay_ms
+    pop r0
     pop r17
     pop r16
-    pop r0
     out SREG, r0
     pop r0
     reti
