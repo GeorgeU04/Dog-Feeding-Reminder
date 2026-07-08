@@ -15,7 +15,6 @@ String: .asciz  "Fed: "
 .global main
 main:
     ldi r30, 1
-    ldi r29, 5
     ldi r16, (1 << DDB0)
     out DDRB, r16 
     ldi r16, (0 << PB0)
@@ -49,6 +48,8 @@ main:
         logTime:
             rcall Set_Cursor
             rcall LCD_Write_String
+            rcall DS3231_Read
+            mov r29, r17
             rcall LCD_Write_Num 
             ldi r16, 0
             sts Interrupt, r16 ; reset intterupt flag to 0
@@ -72,10 +73,10 @@ I2C_Write:
     lds r16, TWSR
     andi r16, 0xF8 ; Check if START was transmitted, status code should be 0x08
     cpi r16, 0x08 
-    brne Error
 
-    ldi r16, LCDAddr 
-    sts TWDR, r16 ; Write SLA, from r17 into TWDR
+
+    ldi r16, LCDAddr
+    sts TWDR, r16 ; Write SLA, from r16 into TWDR
     ldi r16, (1 << TWINT) | (1 << TWEN) 
     sts TWCR, r16 ; Transmit SLA+W
 
@@ -130,11 +131,10 @@ Error:
     out PORTB, r16
     rjmp Error
 
-I2C_Read:
-    push r16
-    push r17
+DS3231_Read:
     push r26
     push r27
+    push r16
 
     ldi r16, (1 << TWINT) | (1 << TWSTA) | (1 << TWEN) ; Send start condition 
     sts TWCR, r16
@@ -142,15 +142,14 @@ I2C_Read:
     wait5: 
         lds r16, TWCR 
         sbrs r16, TWINT ; Check if TWINT bit of TWCR is set 
-        rjmp wait5
+        rjmp wait5 
 
     lds r16, TWSR
     andi r16, 0xF8 ; Check if START was transmitted, status code should be 0x08
     cpi r16, 0x08 
-    brne Error
 
-    ldi r16, LCDAddr 
-    sts TWDR, r16 ; Write SLA, from r17 into TWDR
+    ldi r16, RTCAddr
+    sts TWDR, r16 ; Write SLA, from r16 into TWDR
     ldi r16, (1 << TWINT) | (1 << TWEN) 
     sts TWCR, r16 ; Transmit SLA+W
 
@@ -163,13 +162,8 @@ I2C_Read:
     andi r16, 0xF8 ; Check if SLA+W was received, status code should be 0x18
     cpi r16, 0x18
     brne Error
-    
-    ldi r26, lo8(LCDBytes)
-    ldi r27, hi8(LCDBytes)
-    ldi r17, 4
 
-    loop5:
-    ld r16, X+
+    ldi r16, 0x00 ; set register pointer to 0x00 for seconds
     sts TWDR, r16 ; Write data into TWDR
     ldi r16, (1 << TWINT) | (1 << TWEN) 
     sts TWCR, r16 ; Transmit data
@@ -182,23 +176,73 @@ I2C_Read:
     lds r16, TWSR
     andi r16, 0xF8 ; Check if data was received, status code should be 0x28
     cpi r16, 0x28
-    brne Error
-    dec r17
-    brne loop5 
+    brne Error2
+
+    ldi r16, (1 << TWINT) | (1 << TWEN) | (1<<TWSTA)
+    sts TWCR, r16 ; Transmit SLA+R repeated start
+
+    wait8:
+        lds r16, TWCR 
+        sbrs r16, TWINT ; Check if TWINT bit of TWCR is set
+        rjmp wait8
+
+    lds r16, TWSR
+    andi r16, 0xF8 ; Check if repeated start was received, status code should be 0x10
+    cpi r16, 0x10
+    brne Error2
+
+    wait9:
+        lds r16, TWCR 
+        sbrs r16, TWINT ; Check if TWINT bit of TWCR is set
+        rjmp wait9
+
+    ldi r16, RTCAddr
+    ori r16, 0x01
+    sts TWDR, r16 ; Write SLA, from r16 into TWDR
+    ldi r16, (1 << TWINT) | (1 << TWEN)
+    sts TWCR, r16 ; Transmit SLA+R repeated start
+
+    wait10:
+        lds r16, TWCR 
+        sbrs r16, TWINT ; Check if TWINT bit of TWCR is set
+        rjmp wait10
+
+    lds r16, TWSR
+    andi r16, 0xF8 ; Check if SLA+R was received, status code should be 0x40
+    cpi r16, 0x40
+    brne Error2
+
+    ldi r16, (1<<TWINT) |  (1<< TWEN) ; Clear TWINT bit
+    sts TWCR, r16
+
+    wait11:
+        lds r16, TWCR 
+        sbrs r16, TWINT ; Check if TWINT bit of TWCR is set
+        rjmp wait11
+
+    lds r16, TWSR
+    andi r16, 0xF8 ; Check if data was received, status code should be 0x50
+    cpi r16, 0x58
+    brne Error2
+    lds r17, TWDR ; read data
 
     ldi r16, (1 << TWINT) | (1 << TWEN) | (1 << TWSTO)
     sts TWCR, r16 ; Transmit stop
 
-    wait8:
+    wait12:
         lds r16, TWCR 
         sbrc r16, TWSTO
-        rjmp wait8
+        rjmp wait12
 
+    pop r16
     pop r27
     pop r26
-    pop r17
-    pop r16
     ret
+
+Error2:    
+    ldi r16, (1 << PB0)
+    out PORTB, r16
+    rjmp Error2
 
 Write_Command_LCD:
     push r16
@@ -287,6 +331,7 @@ LCD_Write_Num:
     push r20
     ldi r20, 0
     ldi r16, 0x30 ; add to get ascii value for num
+    ; this is a dumb way to do this but it works
     mov r17, r29
     cpi r17, 10
     brlt OneDigit
