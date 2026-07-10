@@ -8,27 +8,31 @@
 .equ clockSpeed, 16000000UL
 Interrupt: .byte 0
 LCDBytes: .byte 0,0,0,0
+Minutes: .byte 0 
+Hours: .byte 0
 .section .progmem.data
 String: .asciz  "Fed: "
 
 .text
 .global main
 main:
+    cli
     ldi r30, 1
     ldi r16, (1 << DDB0)
     out DDRB, r16 
     ldi r16, (0 << PB0)
     out PORTB, r16
-    cli
-    sts EICRA, 0b00000000	; set INT0 to trigger on a logic level 0
-    sbi EIMSK, INT0 ; Enable INT0
-    sei
+    cbi DDRD, DDD2
+    sbi PORTD, PD2		; INT0 pull-up so pin is not floating at power-on
+    sts EICRA, 0b00000010	; INT0 falling edge (not level-low)
     ; I2C Init
     lds r16, TWSR
     andi r16, 0b11111000
     sts TWSR, r16
     ldi r16, 72
     sts TWBR, r16
+    ldi r17, 50
+    rcall Delay_ms		; let LCD/RTC stabilize after power-on
     ; LCD Init
     rcall LCD_Init
     ldi r17, 20
@@ -40,6 +44,10 @@ main:
     rcall Set_Cursor
     ldi r17, 10
     rcall Delay_ms
+    ldi r16, 0
+    sts Interrupt, r16	; clear any spurious flag before enabling INT0
+    sbi EIMSK, INT0
+    sei
     ; Write Data
     Loop:
         lds r16, Interrupt
@@ -49,7 +57,12 @@ main:
             rcall Set_Cursor
             rcall LCD_Write_String
             rcall DS3231_Read
-            mov r29, r17
+            lds r29, Hours
+            rcall LCD_Write_Num 
+            ldi r18, ':'
+            rcall Write_Data_LCD
+            ldi r18, 0
+            lds r29, Minutes
             rcall LCD_Write_Num 
             ldi r16, 0
             sts Interrupt, r16 ; reset intterupt flag to 0
@@ -135,7 +148,14 @@ DS3231_Read:
     push r26
     push r27
     push r16
+    push r18
+    push r19
+    rjmp DS3231_Start
 
+DS3231_Err:
+    rjmp Error
+
+DS3231_Start:
     ldi r16, (1 << TWINT) | (1 << TWSTA) | (1 << TWEN) ; Send start condition 
     sts TWCR, r16
 
@@ -161,9 +181,9 @@ DS3231_Read:
     lds r16, TWSR
     andi r16, 0xF8 ; Check if SLA+W was received, status code should be 0x18
     cpi r16, 0x18
-    brne Error
+    brne DS3231_Err
 
-    ldi r16, 0x00 ; set register pointer to 0x00 for seconds
+    ldi r16, 0x01 ; set register pointer to 0x01 for minutes
     sts TWDR, r16 ; Write data into TWDR
     ldi r16, (1 << TWINT) | (1 << TWEN) 
     sts TWCR, r16 ; Transmit data
@@ -176,7 +196,7 @@ DS3231_Read:
     lds r16, TWSR
     andi r16, 0xF8 ; Check if data was received, status code should be 0x28
     cpi r16, 0x28
-    brne Error2
+    brne DS3231_Err
 
     ldi r16, (1 << TWINT) | (1 << TWEN) | (1<<TWSTA)
     sts TWCR, r16 ; Transmit SLA+R repeated start
@@ -189,7 +209,7 @@ DS3231_Read:
     lds r16, TWSR
     andi r16, 0xF8 ; Check if repeated start was received, status code should be 0x10
     cpi r16, 0x10
-    brne Error2
+    brne DS3231_Err
 
     wait9:
         lds r16, TWCR 
@@ -210,11 +230,16 @@ DS3231_Read:
     lds r16, TWSR
     andi r16, 0xF8 ; Check if SLA+R was received, status code should be 0x40
     cpi r16, 0x40
-    brne Error2
+    brne DS3231_Err2_Sla
+    rjmp DS3231_Read_Minutes
 
-    ldi r16, (1<<TWINT) |  (1<< TWEN) ; Clear TWINT bit
+DS3231_Err2_Sla:
+    rjmp Error2
+
+DS3231_Read_Minutes:
+    ; reading minutes
+    ldi r16, (1<<TWINT) |  (1<< TWEN) | (1<< TWEA) ; Clear TWINT bit
     sts TWCR, r16
-
     wait11:
         lds r16, TWCR 
         sbrs r16, TWINT ; Check if TWINT bit of TWCR is set
@@ -222,22 +247,65 @@ DS3231_Read:
 
     lds r16, TWSR
     andi r16, 0xF8 ; Check if data was received, status code should be 0x50
-    cpi r16, 0x58
-    brne Error2
+    cpi r16, 0x50
+    brne DS3231_Err2
+
     lds r17, TWDR ; read data
+    mov r18, r17
+    lsr r17
+    lsr r17
+    lsr r17
+    lsr r17
+    ldi r19, 10
+    mul r17, r19
+    mov r17, r0
+    andi r18, 0x0F
+    add r17, r18
+    sts Minutes, r17
+
+    ; reading hours
+    ldi r16, (1<<TWINT) |  (1<< TWEN) ; Clear TWINT bit
+    sts TWCR, r16
+
+    wait12:
+        lds r16, TWCR 
+        sbrs r16, TWINT ; Check if TWINT bit of TWCR is set
+        rjmp wait12
+
+    lds r16, TWSR
+    andi r16, 0xF8 ; Check if data was received, status code should be 0x50
+    cpi r16, 0x58
+    brne DS3231_Err2
+
+    lds r17, TWDR ; read data
+    mov r18, r17
+    lsr r17
+    lsr r17
+    lsr r17
+    lsr r17
+    mul r17, r19
+    mov r17, r0
+    andi r18, 0x0F
+    add r17, r18
+    sts Hours, r17
 
     ldi r16, (1 << TWINT) | (1 << TWEN) | (1 << TWSTO)
     sts TWCR, r16 ; Transmit stop
 
-    wait12:
+    wait13:
         lds r16, TWCR 
         sbrc r16, TWSTO
-        rjmp wait12
+        rjmp wait13
 
+    pop r19
+    pop r18
     pop r16
     pop r27
     pop r26
     ret
+
+DS3231_Err2:
+    rjmp Error2
 
 Error2:    
     ldi r16, (1 << PB0)
@@ -481,7 +549,7 @@ INT0_vect:
     push r0
     ldi r16, 1  ; set intterupt flag
     sts Interrupt, r16
-    ldi r17, 70
+    ldi r17, 100
     rcall Delay_ms
     pop r0
     pop r17
